@@ -4,7 +4,8 @@ import re
 from openai import OpenAI
 
 from Hearthstone import Hearthstone
-from matrix_2_text import combine_names_and_stats_with_info, convert_minions_matrix_and_info_to_text, convert_weapons_data_to_text
+from matrix_2_text import *
+
 
 def call_openai_api(game_state, temperature=0.7, max_tokens=150):
     client = OpenAI(
@@ -21,7 +22,7 @@ def call_openai_api(game_state, temperature=0.7, max_tokens=150):
 
     print(completion.choices[0].message.content)
 
-    return completion.choices[0].message.content
+    return int(completion.choices[0].message.content[-2])
 
 
 def game_state_for_LLM(obs, options, player, op_player):
@@ -46,23 +47,25 @@ def game_state_for_LLM(obs, options, player, op_player):
     
     weapon_text = convert_weapons_data_to_text(player_state['weapon_name_description'])
 
-    print()
+    secret_text = convert_secrets_data_to_text(player_state['secret_name_description'])
 
+    hero_stats_text = convert_hero_state_to_text(player_state['hero_stats'])
+
+    return '/n'.join([hand_zone_text, minion_text, weapon_text, secret_text, hero_stats_text])
+
+def game_action_for_env(game_state, actions):
+    actions_list = []
     
-
+    for i in actions:
+        actions_list.append(i.FullPrint())
     
+    actions = convert_actions_to_text(actions_list)
+
+    action_state_input = '/n'.join([game_state, actions])
+
+    output_prompt = ' Attention! You need choose 1 action and give me the index number in the end of your reply, JUST GIVE ME 1 OPTION, DONT SHOW OTHERS' 
     
-
-
-
-
-    # game_state = f"Your hand have {handcards}"
-    pass
-
-def game_action_for_env(ai_move):
-
-
-    pass
+    return action_state_input + output_prompt
 
 
 
@@ -78,22 +81,28 @@ def multi_turn_conversation_with_bot(player, op_player):
         
         # other method --random action
         if player != position+ '_not_in_model':
-            print("bot's turn")
+            print("bot's action")
             action = random.choice(options)
             position, obs, options, reward, done = game.step(action)
             continue
 
-        print("LLM's turn:")
+        print("LLM's action")
         game_state = game_state_for_LLM(obs, options, player, op_player)
 
-        # ai_move = call_openai_api(game_state)
+        input_for_model = game_action_for_env(game_state, options)
 
+        # ai_move = call_openai_api(input_for_model)
         # action = game_action_for_env(ai_move)
         action = random.choice(options)
+
         position, obs, options, reward, done = game.step(action)
 
-        if done is True:
+        if reward == 1:
             print('Game Over! AI wins!')
+        elif reward == -1:
+            print('Game Over! Bot wins')
+        if done is True:
+            break
 
 
 if __name__ == '__main__':
