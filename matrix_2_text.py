@@ -198,3 +198,143 @@ def convert_weapons_data_to_text(weapon_data):
             descriptions.append(f"Opponent's Weapon: {weapon_name} and description: {weapon_desc}")
 
     return "\n".join(descriptions)
+
+
+def convert_secrets_data_to_text(secrets_data):
+    # 检查自己的秘密
+    if all(secret is None for secret in secrets_data):
+        return ""
+
+    descriptions = []
+
+    for i, secret in enumerate(secrets_data):
+        if secret is None:
+            continue
+
+        secret_name = secret[0]
+        secret_desc = secret[1].replace("Description: ", "").strip()
+
+        descriptions.append(f"Your Secret {i + 1}: {secret_name}. Description: {secret_desc}")
+
+    return "\n".join(descriptions) if descriptions else "You have no secrets."
+
+
+def convert_hero_state_to_text(hero_state):
+    descriptions = []
+
+    for i, state in enumerate(hero_state):
+        if i == 0:
+            player_type = "Your"
+        else:
+            player_type = "Opponent's"
+
+        # 基础信息
+        attack_damage = int(state[1])
+        base_health = int(state[2])
+        current_health = int(state[3])
+        remaining_mana = int(state[7])
+        base_mana = int(state[8])
+        spell_power = int(state[9])
+        armor = int(state[10])
+
+        # 武器处理
+        if state[11] == 1:  # 如果武器存在
+            weapon_durability = int(state[12])
+            weapon_attack = int(state[13])
+            weapon_info = f"with a weapon (Attack: {weapon_attack}, Durability: {weapon_durability})"
+        else:
+            weapon_info = None
+
+        deck_count = int(state[14])
+        hand_count = int(state[15])
+        secret_count = int(state[16])
+
+        # 可选状态
+        status_parts = []
+        if state[4] == 1:
+            status_parts.append("frozen")
+        if state[5] == 1:
+            status_parts.append("has windfury")
+        if state[6] == 1:
+            status_parts.append("has stealth")
+
+        status_text = ", ".join(status_parts) if status_parts else None
+
+        # 排除不能攻击的情况
+        description = f"{player_type} hero has {attack_damage} attack damage, {base_health} base health ({current_health} current health), "
+        description += f"{remaining_mana}/{base_mana} mana, {spell_power} spell power, {armor} armor."
+
+        # 仅在有武器时添加武器信息
+        if weapon_info:
+            description += f" {weapon_info}."
+
+        description += f" {player_type} have {deck_count} cards in the deck, {hand_count} cards in hand."
+
+        # 仅在有秘密时提到秘密
+        if secret_count > 0:
+            description += f" and {secret_count} secrets."
+
+        # 仅在有状态时提到状态
+        if status_text:
+            description += f" Status: {status_text}."
+
+        if i == 0:
+            num_attacks = int(state[26])
+            num_cards_played = int(state[27])
+            overload_locked = int(state[28])
+            description += (
+                f" Number of attacks this turn: {num_attacks}, cards played this turn: {num_cards_played}, "
+                f"overload locked: {overload_locked}."
+            )
+
+        descriptions.append(description.strip())  # 删除末尾可能多余的空格
+
+    return "\n".join(descriptions)
+
+
+def convert_actions_to_text(action_list):
+    descriptions = []
+    print('org: ', len(action_list))
+    for i, action in enumerate(action_list):
+        if 'EndTurnTask' in action:
+            descriptions.append(f"{i}. You end your turn.")
+        elif 'PlayCardTask' in action:
+            # 获取卡牌名称和类型
+            card_info = action.split("play ")[1].split(" Option")[0]
+            card_name, card_type = card_info.split('(')
+            target_info = action.split("'")  # 用于获取目标
+            if  "MINION" in action:
+                position_info = action.split("to Pos[")[1].split(']')[0]
+                descriptions.append(f"{i}.You play {card_name} (MINION) to position {position_info}.")
+            elif "SPELL" in action:
+                if len(target_info) > 2:
+                    # target_name = target_info[2]  # 目标
+                    descriptions.append(f"{i}. You play {card_name} ({card_type.strip()}).")
+                else:
+                    descriptions.append(f"{i}. You play {card_name} ({card_type.strip()}).")
+            elif 'WEAPON' in action:
+                descriptions.append(f"{i}. You play {card_name} ({card_type.strip()}).")
+
+        elif 'HeroPowerTask' in action:
+            # 获取英雄技能名称
+            hero_power = action.split("using '")[1].split("'")[0]
+            descriptions.append(f"{i}. You use the hero power '{hero_power}'.")
+        elif 'HeroAttackTask' in action:
+            # 获取攻击信息
+            attacker = action.split("'")[1]
+            target = action.split("attacks '")[1].split("'")[0]
+            descriptions.append(f"Your {attacker} attacks {target}.")
+        elif 'MinionAttackTask' in action:
+            attacker = action.split("'")[1]
+            target = action.split("attack")[1]
+            descriptions.append(f"Your {attacker} attacks {target}.")
+
+    print('after: ', len(descriptions))
+
+    if len(descriptions) != len(action_list):
+        print('Actions number not match')
+    
+
+
+    return 'You can choose one action from below: ' + ' '.join(descriptions)
+
