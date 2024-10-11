@@ -1,6 +1,6 @@
 import re
 import numpy as np
-
+import random
 
 
 def clean_description(description):
@@ -11,7 +11,13 @@ def clean_description(description):
     cleaned = cleaned.replace('\n', ' ')         
     return cleaned.strip()
 
-
+def extract_last_integer(text):
+    # 正则表达式匹配所有整数
+    matches = re.findall(r'\b\d+\b', text)
+    if matches:
+        return int(matches[-1])  # 返回最后一个匹配的整数
+    else:
+        return None  # 或者返回其他值，表示没有找到整数
 
 def combine_names_and_stats_with_info(card_feat, card_info):
     descriptions = []
@@ -294,8 +300,11 @@ def convert_hero_state_to_text(hero_state):
 
 def convert_actions_to_text(action_list):
     descriptions = []
-    print('org: ', len(action_list))
+    # print('org: ', len(action_list))
     for i, action in enumerate(action_list):
+        if 'ChooseTask' in action:
+            return random.randint(0, len(action_list)-1)
+
         if 'EndTurnTask' in action:
             descriptions.append(f"{i}. You end your turn.")
         elif 'PlayCardTask' in action:
@@ -314,6 +323,8 @@ def convert_actions_to_text(action_list):
                     descriptions.append(f"{i}. You play {card_name} ({card_type.strip()}).")
             elif 'WEAPON' in action:
                 descriptions.append(f"{i}. You play {card_name} ({card_type.strip()}).")
+            elif 'HERO' in action:
+                descriptions.append(f"{i}. You play {card_name} ({card_type.strip()}).")
 
         elif 'HeroPowerTask' in action:
             # 获取英雄技能名称
@@ -323,13 +334,13 @@ def convert_actions_to_text(action_list):
             # 获取攻击信息
             attacker = action.split("'")[1]
             target = action.split("attacks '")[1].split("'")[0]
-            descriptions.append(f"Your {attacker} attacks {target}.")
+            descriptions.append(f"{i}. Your {attacker} attacks {target}.")
         elif 'MinionAttackTask' in action:
             attacker = action.split("'")[1]
             target = action.split("attack")[1]
-            descriptions.append(f"Your {attacker} attacks {target}.")
+            descriptions.append(f"{i}. Your {attacker} attacks {target}.")
 
-    print('after: ', len(descriptions))
+    # print('after: ', len(descriptions))
 
     if len(descriptions) != len(action_list):
         print('Actions number not match')
