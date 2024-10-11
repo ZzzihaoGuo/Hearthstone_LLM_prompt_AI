@@ -1,200 +1,580 @@
-import re
 import numpy as np
+import clr
+import random
+import os
+import System
+from System.Collections import *
+# sys.path.append("/home/xingdp/xia_wannian/HearthStoneAI/SabberStone-master/core-extensions/SabberStoneBasicAI/bin/Debug/netstandard2.0")
+clr.AddReference(
+    os.getcwd() + "/Env/DllSimulator/SabberStoneCore.dll")
+clr.AddReference(
+    os.getcwd() + "/Env/DllSimulator/SabberStoneBasicAI.dll")
+import SabberStoneCore
+import SabberStoneBasicAI
+from SabberStoneBasicAI.Score import *
+from SabberStoneBasicAI.Nodes import *
+from SabberStoneBasicAI.Meta import *
+from SabberStoneCore.Enums import *
+from SabberStoneCore.Config import *
+from SabberStoneCore.Model import *
+from SabberStoneCore.Tasks.PlayerTasks import ChooseTask
+
+# import sys
+# sys.path.append('/data/xwn/projects/CardsDreamer')
+from Deck import Deck
 
 
+def check_race(card_entity):
+    """
+        Get the minion race
+    """
+    race_list = [0, 18, 15, 20, 14, 21, 23, 17, 24]
+    race_id = None
+    for (i, id) in enumerate(race_list):
+        if card_entity.IsRace(id):
+            race_id = i
+            break
+    return race_id
 
-def clean_description(description):
-    # 移除 HTML 标签和特殊字符
-    cleaned = re.sub(r'<[^>]+>', '', description)  
-    cleaned = re.sub(r'\[.*?\]', '', cleaned)      
-    cleaned = re.sub(r'@\s*', '', cleaned)  
-    cleaned = cleaned.replace('\n', ' ')         
-    return cleaned.strip()
+def check_type(card_type):
+    """
+        Get the card type
+    """
+    type_list = [4, 5, 7]
+    return type_list.index(card_type)
+    # [0: minion, 1: spell, 2: weapon]
 
-
-
-def combine_names_and_stats_with_info(card_feat, card_info):
-    descriptions = []
-    
-    if card_info[0] == None:
-        return "Your hand zone has no cards"
-
-    for i in range(card_feat.shape[0]):  # 遍历每一行
-        # 跳过空行（如果第一列没有填充）
-        if card_info[i] is None:
-            continue
-        
-        # 提取卡牌特征
-        cost = card_feat[i, 0]  # 卡牌消耗
-        org_cost = card_feat[i, 1]  # 卡牌消耗
-        is_playable = 'playable' if card_feat[i, 2] == 1 else 'not playable'  # 是否可打出
-        
-        # 提取卡牌类型
-        if card_feat[i, 16] == 1:  # minion
-            org_atk = card_feat[i, 3]
-            atk = card_feat[i, 4]
-            health = card_feat[i, 5]
-            org_health = card_feat[i, 6]
-            type_desc = f"Minion with {atk} attack and {health} health, orginally with {org_atk} attack and {org_health} health."
-        elif card_feat[i, 18] == 1:  # weapon
-            org_atk = card_feat[i, 3]
-            atk = card_feat[i, 4]
-            durability = card_feat[i, 5]
-            type_desc = f"Weapon with {atk} attack and {durability} durability, orginally with{org_atk} attack"
-        elif card_feat[i, 17] == 1:  # spell
-            type_desc = "Spell."
+def DeckList(deck_list, random_cards=False):
+    deck = System.Collections.Generic.List[Card]()
+    for card_name in deck_list:
+        card = Cards.FromName(card_name)
+        if random_cards == True:
+            # To decouple the description and corresponding scalar vector, randomize the Attack, Health, Cost of a card.
+            if card.Type == 4:
+                card.ATK = random.randint(0, 12)
+                card.Health = random.randint(1, 12)
+                card.Cost = random.randint(0, 10)
+            elif card.Type == 5:
+                card.Cost = random.randint(0, 10)
+            elif card.Type == 7:
+                card.Cost = random.randint(0, 10)
+                card.ATK = random.randint(0, 10)
+        if card is None:
+            raise Exception("Card Is None Exception {}".format(card_name))
         else:
-            type_desc = "Unknown card type."
+            deck.Add(Cards.FromName(card_name))
+
+    return deck
+
+def get_card_description(card_name, card_text):
+    # description = f"Name: {card_name}. Description: {card_text}"
+    description = f"Description: {card_text}"
+    return [card_name, description]
+
         
-        # 提取卡牌名称和描述
-        name, info = card_info[i]
+def modify_cards():
+    # Some cards has been updated by the official game, while SabberStone has not yet implemented
+    soulfire = Cards.FromName("Soulfire")
+    soulfire.Cost = 0
 
-        info = clean_description(info)
+    knifeujuggler = Cards.FromName("Knife Juggler")
+    knifeujuggler.ATK = 3
+
+    leeroy = Cards.FromName("Leeroy Jenkins")
+    leeroy.Cost = 4
+
+    hunter_mark = Cards.FromName("Hunter's Mark")
+    hunter_mark.Cost = 0
+
+    flare = Cards.FromName("Flare")
+    flare.Cost = 1
+
+    starving_buzzard = Cards.FromName("Starving Buzzard")
+    starving_buzzard.Cost = 2
+    starving_buzzard.ATK = 2
+    starving_buzzard.Health = 1
+
+    mana_wyrm = Cards.FromName("Mana Wyrm")
+    mana_wyrm.Cost = 1
+
+    equality = Cards.FromName("Equality")
+    equality.Cost = 2
+
+    return
+
+
+class Hearthstone:
+    def __init__(self, random_cards=False, player1_name="Player1", player2_name="Player2", start_player=1,
+                 fill_decks=False, shuffle=True, skip_mulligan=False, logging=False, history=False,
+                 player1_deck=None, player2_deck=None, deck_data_path='/home/zihao/phd_kcl/Cardsformer/newenv/training_decks_final_5052.json', unseen_cards=None):
+        game_config = GameConfig()
+        game_config.StartPlayer = start_player
+        game_config.Player1Name = player1_name  # Player 1 starts first
+        game_config.Player2Name = player2_name  # Player 2 plays second
+        game_config.FillDecks = fill_decks
+        game_config.Shuffle = shuffle
+        game_config.SkipMulligan = skip_mulligan
+        game_config.Logging = logging
+        game_config.History = history
+        self.game_config = game_config
+        modify_cards()
+        self.player1_deck = player1_deck
+        self.player2_deck = player2_deck
+        self.random_cards = random_cards
+        self.deck = Deck(deck_data_path)
+
+
+    def step(self, action):
+        self.game.Process(action)
+        current_position = self.game.CurrentPlayer.Name
+        current_oppo = self.game.CurrentOpponent.Name
+        obs = {
+            'Player1': None,
+            'Player2': None,
+        }
+        obs[current_oppo] = self.get_observation(current=False)
+        obs[current_position] = self.get_model_input(self.get_observation(current=True))
+        obs[current_position + '_not_in_model'] = self.get_observation(current=True)
+
+        actions = self.get_agent_actions()
+        reward = 0
+        done = self.game.State == State.COMPLETE
+
+        if done:
+            won = self.game.CurrentPlayer.PlayState == PlayState.WON
+
+            cur_player = 1 if self.game.CurrentPlayer.Name == "Player1" else 2
+
+            # Reward is 1 if 'Player1' wins, -1 if 'Player2' wins
+            reward_change = 1 if won else -1
+            reward_change *= 1 if cur_player == 1 else -1
+            reward += reward_change
+
+        return current_position, obs, actions, reward, done
+
+    def reset(self):
+        self.p1_deck = self.deck.get_random_deck() if self.player1_deck is None else self.deck.get_deck_by_index(self.player1_deck)
+        self.p2_deck = self.deck.get_random_deck() if self.player2_deck is None else self.deck.get_deck_by_index(self.player2_deck)
+        self.decks = {
+            'Player1': self.p1_deck,
+            'Player2': self.p2_deck,
+        }
+        self.game_config.Player1HeroClass = self.p1_deck["Class"]
+        self.game_config.Player1Deck = DeckList(self.p1_deck["Deck"], self.random_cards)
+        self.game_config.Player2HeroClass = self.p2_deck["Class"]
+        self.game_config.Player2Deck = DeckList(self.p2_deck["Deck"], self.random_cards)
+        self.game = Game(self.game_config)
+        self.game.StartGame()
+        self.game.Process(ChooseTask.Mulligan(
+            self.game.Player1, System.Collections.Generic.List[int]()))
+        self.game.Process(ChooseTask.Mulligan(
+            self.game.Player2, System.Collections.Generic.List[int]()))
+        self.game.MainReady()
+        position = self.game.CurrentPlayer.Name
+        opponent_player = self.game.CurrentOpponent.Name
+
         
-        # 合并特征和描述
-        description = f"Card Name: {name}. Cost: {cost} and orginal Coat: {org_cost}, {type_desc} Status: {is_playable}. {info}"
-        descriptions.append(description)
+        obs = {
+            'Player1': None,
+            'Player2': None,
+        }
+        obs[position] = self.get_model_input(self.get_observation(current=True))
+        obs[opponent_player] = self.get_observation(current=False)
+        obs[position + '_not_in_model'] = self.get_observation(current=True)
+
+        actions = self.get_agent_actions()
+        done = self.game.State == State.COMPLETE
+        reward = 0
+        return position, obs, actions, reward, done
     
-    return 'Your hand zone cards are as follow: ' + "\n\n".join(descriptions)  
 
-
-def convert_minions_matrix_and_info_to_text(minions, minion_info):
-    # 检查前7个随从是否全为 None
-    if all(info is None for info in minion_info[:7]):
-        player_minions_description = "You have no minions."
-    else:
-        player_minions_description = generate_minions_description(minions[:7], minion_info[:7], "Your")
-    
-    # 检查后7个随从是否全为 None
-    if all(info is None for info in minion_info[7:]):
-        opponent_minions_description = "Your opponent has no minions."
-    else:
-        opponent_minions_description = generate_minions_description(minions[7:], minion_info[7:], "Opponent's")
-
-    # 返回完整的描述文本
-    return f"{player_minions_description}\n\n{opponent_minions_description}"
-
-def generate_minions_description(minions_slice, minion_info_slice, owner):
-    descriptions = []
-    race_names = {
-    0: "INVALID",
-    1: "BLOODELF",
-    2: "DRAENEI",
-    3: "DWARF",
-    4: "GNOME",
-    5: "GOBLIN",
-    6: "HUMAN",
-    7: "NIGHTELF",
-    8: "ORC",
-    9: "TAUREN",
-    10: "TROLL",
-    11: "UNDEAD",
-    12: "WORGEN",
-    13: "GOBLIN2",
-    14: "MURLOC",
-    15: "DEMON",
-    16: "SCOURGE",
-    17: "MECHANICAL",
-    18: "ELEMENTAL",
-    19: "OGRE",
-    20: "BEAST",
-    21: "TOTEM",
-    22: "NERUBIAN",
-    23: "PIRATE",
-    24: "DRAGON",
-    25: "BLANK",
-    26: "ALL",
-    38: "EGG"
-}
-    
-    for i, minion in enumerate(minions_slice):
-        # 跳过空行（如果没有随从）
-        if minion[0] == 0:
-            continue
-
-        # 提取随从基础信息
-        cost = minion[0]  # 法力值消耗
-        can_attack = 'can attack' if minion[1] == 1 else 'cannot attack'
-        atk = minion[2]  # 基础攻击力
-        attack_damage = minion[3]  # 当前攻击力
-        health = minion[4]  # 当前生命值
-        base_health = minion[5]  # 基础生命值
-
-        # 提取关键字信息，并排除"no"的状态
-        status_list = []
-        if minion[6] == 1:
-            status_list.append('Taunt')
-        if minion[7] == 1:
-            status_list.append('Divine Shield')
-        if minion[8] == 1:
-            status_list.append('Deathrattle')
-        if minion[9] == 1:
-            status_list.append('Frozen')
-        if minion[10] == 1:
-            status_list.append('Windfury')
-        if minion[11] == 1:
-            status_list.append('Silenced')
-        if minion[12] == 1:
-            status_list.append('Stealth')
-
-        # 提取随从种族信息
-        race = np.argmax(minion[14:])  # 获取种族的索引
-        race_name = race_names.get(race, "Unknown race")  # 获取种族名称 race"
-        
-        # 结合随从信息
-        if minion_info_slice[i] is not None:
-            minion_name = minion_info_slice[i][0]  # 获取随从名称
-            minion_desc = clean_description(minion_info_slice[i][1])  # 获取随从描述并替换换行符
+    def player_state(self, current = True):
+        """
+            Get the scalar feature vector of a player entity
+        """
+        hero_state = np.zeros((2, 31))
+        if current:
+            player_list = [self.game.CurrentPlayer, self.game.CurrentOpponent]
         else:
-            minion_name = "Unknown Minion"
-            minion_desc = "No description available."
+            player_list = [self.game.CurrentOpponent, self.game.CurrentPlayer]
+        for i in range(2):
+            entity = player_list[i]
+            hero_state[i, 0] = 1 if entity.Hero.CanAttack else 0
+            hero_state[i, 1] = entity.Hero.AttackDamage
+            hero_state[i, 2] = entity.Hero.BaseHealth
+            hero_state[i, 3] = entity.Hero.Health
+            hero_state[i, 4] = 1 if entity.Hero.IsFrozen else 0
+            hero_state[i, 5] = 1 if entity.Hero.HasWindfury else 0
+            hero_state[i, 6] = 1 if entity.Hero.HasStealth else 0
+            hero_state[i, 7] = entity.RemainingMana
+            hero_state[i, 8] = entity.BaseMana
+            hero_state[i, 9] = entity.CurrentSpellPower
+            hero_state[i, 10] = entity.Hero.Armor
+            if entity.Hero.Weapon is not None:
+                hero_state[i, 11] = 1
+                hero_state[i, 12] = entity.Hero.Weapon.Durability
+                hero_state[i, 13] = entity.Hero.Weapon.Card.ATK
+            hero_state[i, 14] = entity.DeckZone.Count
+            hero_state[i, 15] = entity.HandZone.Count
+            hero_state[i, 16] = entity.SecretZone.Count
+            hero_state[i, 17 + entity.BaseClass - 2] = 1
+            if i < 1:
+                hero_state[i, 26] = entity.Hero.NumAttacksThisTurn
+                hero_state[i, 27] = entity.NumCardsPlayedThisTurn
+                hero_state[i, 28] = entity.OverloadLocked
 
-        # 拼接状态列表
-        status_str = ", ".join(status_list) if status_list else "No special abilities"
+        return hero_state
+
+
+    def hand_card_state(self, current = True):
+
+        """
+            Get the scalar feature vector of a hand card entity
+        """
+        card_feat = np.zeros((11, 23))
+        if current:
+            handzone = self.game.CurrentPlayer.HandZone
+        else:
+            handzone = self.game.CurrentOpponent.HandZone
+        for (i, entity) in enumerate(handzone):
+            card_feat[i, 0] = entity.Cost
+            card_feat[i, 1] = entity.Card.Cost
+            card_feat[i, 2] = 1 if entity.IsPlayable else 0
+            # [0: minion, 1: spell, 2: weapon]
+            if entity.Card.Type != 3:
+                type_id = check_type(entity.Card.Type)
+            
+
+                if type_id == 0:  # minion
+                    card_feat[i, 3] = entity.Card.ATK
+                    card_feat[i, 4] = entity.AttackDamage
+                    card_feat[i, 5] = entity.Card.Health
+                    card_feat[i, 6] = entity.BaseHealth
+                    card_feat[i, 7 + check_race(entity)] = 1
+                elif type_id == 2:  # weapon
+                    card_feat[i, 3] = entity.Card.ATK
+                    card_feat[i, 4] = entity.AttackDamage
+                    card_feat[i, 5] = entity.Durability
+                    card_feat[i, 6] = entity.Durability
+                card_feat[i, 16 + type_id] = 1
+            # 3 hero card armor
+        return card_feat
+
+
+    def board_minion_state(self, current = True):
         
-        # 生成随从的描述
-        description = (f"{owner} Minion {i + 1}: {minion_name}. Cost {cost}, {can_attack}, "
-                       f"Attack {atk} (Damage {attack_damage}), Health {health}/{base_health}, "
-                       f"{status_str}, Race: {race_name}. {minion_desc}")
-        descriptions.append(description)
+        """
+            Get the scalar feature vector of a minion entity
+        """
+        minions = np.zeros((14, 26))
+        if current:
+            board_zone_list = [self.game.CurrentPlayer.BoardZone, self.game.CurrentOpponent.BoardZone]
+        else:
+            board_zone_list = [self.game.CurrentOpponent.BoardZone, self.game.CurrentPlayer.BoardZone]
+        for (i, entity) in enumerate(board_zone_list[0]):
+            # minions[i, 0] = entity.Cost
+            minions[i, 0] = entity.Card.Cost
+            minions[i, 1] = 1 if entity.CanAttack else 0
+            minions[i, 2] = entity.Card.ATK
+            minions[i, 3] = entity.AttackDamage
+            minions[i, 4] = entity.Health
+            minions[i, 5] = entity.BaseHealth
+            minions[i, 6] = 1 if entity.HasTaunt else 0
+            minions[i, 7] = 1 if entity.HasDivineShield else 0
+            minions[i, 8] = 1 if entity.HasDeathrattle else 0
+            minions[i, 9] = 1 if entity.IsFrozen else 0
+            minions[i, 10] = 1 if entity.HasWindfury else 0
+            minions[i, 11] = 1 if entity.IsSilenced else 0
+            minions[i, 12] = 1 if entity.HasStealth else 0
+            minions[i, 13] = entity.NumAttacksThisTurn
+            minions[i, 14 + check_race(entity)] = 1
+        for (j, entity) in enumerate(board_zone_list[1]):
+            i = j + 7
+            minions[i, 0] = entity.Card.Cost
+            minions[i, 1] = 1 if entity.CanAttack else 0
+            minions[i, 2] = entity.Card.ATK
+            minions[i, 3] = entity.AttackDamage
+            minions[i, 4] = entity.Health
+            minions[i, 5] = entity.BaseHealth
+            minions[i, 6] = 1 if entity.HasTaunt else 0
+            minions[i, 7] = 1 if entity.HasDivineShield else 0
+            minions[i, 8] = 1 if entity.HasDeathrattle else 0
+            minions[i, 9] = 1 if entity.IsFrozen else 0
+            minions[i, 10] = 1 if entity.HasWindfury else 0
+            minions[i, 11] = 1 if entity.IsSilenced else 0
+            minions[i, 12] = 1 if entity.HasStealth else 0
+            minions[i, 13] = entity.NumAttacksThisTurn
+            minions[i, 14 + check_race(entity)] = 1
 
-    return "\n\n".join(descriptions) if descriptions else f"{owner} has no active minions."
+        return minions
+
+    def get_observation(self, current = True):
+        if current:
+            current_player = self.game.CurrentPlayer
+            opponent_player = self.game.CurrentOpponent
+        else:
+            current_player = self.game.CurrentOpponent
+            opponent_player = self.game.CurrentPlayer
+
+        hand_card_names = [None, ] * 11
+        minion_names = [None, ] * 14
+
+        weapon_names = [
+            get_card_description(current_player.Hero.Weapon.Card.Name, current_player.Hero.Weapon.Card.Text) if current_player.Hero.Weapon is not None else None, 
+            get_card_description(opponent_player.Hero.Weapon.Card.Name, opponent_player.Hero.Weapon.Card.Text) if opponent_player.Hero.Weapon is not None else None
+            ]
+        
+        secret_names = [None, ] * 5
+
+        hand_card_stats = self.hand_card_state(current)
+
+        minion_stats = self.board_minion_state(current)
+
+        hero_stats = self.player_state(current)
 
 
-def convert_weapons_data_to_text(weapon_data):
-    # 检查自己和对方的武器
-    if all(weapon is None for weapon in weapon_data):
-        return ""
-    
-    player_weapons = weapon_data[:1]  # 假设第一个是自己的武器
-    opponent_weapons = weapon_data[1:]  # 假设第二个及以后的都是对方的武器
+        for (i, hand_card) in enumerate(current_player.HandZone):
+            hand_card_names[i] = get_card_description(hand_card.Card.Name, hand_card.Card.Text)
 
-    descriptions = []
-    
-    # 处理自己的武器
-    if all(weapon is None for weapon in player_weapons):
-        descriptions.append("You have no weapons.")
-    else:
-        for i, weapon in enumerate(player_weapons):
-            if weapon is None:
+        # check hero power state, add as a hand card if available
+        hand_num = current_player.HandZone.Count
+        if not current_player.Hero.HeroPower.IsExhausted:
+            hand_card_names[hand_num] = get_card_description(current_player.Hero.HeroPower.Card.Name, current_player.Hero.HeroPower.Card.Text)
+            hand_card_stats[hand_num, 0] = current_player.Hero.HeroPower.Cost
+            hand_card_stats[hand_num, 1] = current_player.Hero.HeroPower.Card.Cost
+            hand_card_stats[hand_num, 2] = 1 if current_player.Hero.HeroPower.IsPlayable else 0
+        for (i, board_minion) in enumerate(current_player.BoardZone):
+            minion_names[i] = get_card_description(board_minion.Card.Name, board_minion.Card.Text)
+        for (i, board_minion) in enumerate(opponent_player.BoardZone):
+            minion_names[i + 7] = get_card_description(board_minion.Card.Name, board_minion.Card.Text)
+        for (i, secret) in enumerate(current_player.SecretZone):
+            secret_names[i] = get_card_description(secret.Card.Name, secret.Card.Text)
+
+        cur_state = {
+            "hand_card_names": [i[0] if i != None else None for i in hand_card_names],
+            "minion_names": [i[0] if i != None else None for i in minion_names],
+            "weapon_names": [i[0] if i != None else None for i in weapon_names],
+            "secret_names": [i[0] if i != None else None for i in secret_names],
+            "hand_card_stats": hand_card_stats,
+            "minion_stats": minion_stats,
+            "hero_stats": hero_stats,
+            "deck_strategy": self.decks[current_player.Name]['Strategy'],
+            "hand_card_name_description": hand_card_names,
+            "minion_name_description": minion_names,
+            "weapon_name_description": weapon_names,
+            "secret_name_description": secret_names,
+
+        }
+        # if weapon_names[0] is not None or weapon_names[1] is not None:
+        #     print()
+
+        return cur_state
+
+
+    def get_model_input(self, game_state):
+        options = self.game.CurrentPlayer.Options()
+        num_options = len(options)
+        hand_card_stats_batch = np.repeat(
+            game_state["hand_card_stats"][np.newaxis, :], num_options, axis=0)  # [num, 11, 5]
+        minion_stats_batch = np.repeat(game_state["minion_stats"][np.newaxis, :], num_options, axis=0)
+        hero_stats_batch = np.repeat(game_state["hero_stats"][np.newaxis, :], num_options, axis=0)
+        hand_num = self.game.CurrentPlayer.HandZone.Count
+        for i in range(num_options):
+            option = options[i]
+            option_name = type(option).__name__
+            if option_name == 'EndTurnTask':
                 continue
-            
-            weapon_name = weapon[0]
-            weapon_desc = clean_description(weapon[1])
-            
-            descriptions.append(f"Your Weapon: {weapon_name} and description: {weapon_desc}")
+            elif option_name == 'HeroPowerTask':
+                hand_card_stats_batch[i, hand_num, -1] = 1
+                if option.HasTarget:
+                    if option.Target.Zone is not None:
+                        if option.Target.Zone.Controller.Name == self.game.CurrentPlayer.Name:
+                            minion_stats_batch[i, option.Target.ZonePosition, -2] = 1
+                        elif option.Target.Zone.Controller.Name == self.game.CurrentOpponent.Name:
+                            minion_stats_batch[i, 7 + option.Target.ZonePosition, -2] = 1
+                    elif option.Target == self.game.CurrentPlayer.Hero:
+                        hero_stats_batch[i, 0, -2] = 1
+                    elif option.Target == self.game.CurrentOpponent.Hero:
+                        hero_stats_batch[i, 1, -2] = 1
+            elif option_name == 'PlayCardTask':
+                hand_card_stats_batch[i, option.Source.ZonePosition, -1] = 1
+                if option.ZonePosition != -1:
+                    # play minions, the target has a 'position' flag in -3
+                    minion_stats_batch[i, option.ZonePosition, -3] = 1
+                if option.HasTarget:
+                    if option.Target.Zone is not None:
+                        if option.Target.Zone.Controller.Name == self.game.CurrentPlayer.Name:
+                            minion_stats_batch[i, option.Target.ZonePosition, -2] = 1
+                        elif option.Target.Zone.Controller.Name == self.game.CurrentOpponent.Name:
+                            minion_stats_batch[i, 7 + option.Target.ZonePosition, -2] = 1
+                    elif option.Target == self.game.CurrentPlayer.Hero:
+                        hero_stats_batch[i, 0, -2] = 1
+                    elif option.Target == self.game.CurrentOpponent.Hero:
+                        hero_stats_batch[i, 1, -2] = 1
+                if option.ChooseOne in [1, 2]:
+                    hand_card_stats_batch[i, option.Source.ZonePosition, -2 - option.ChooseOne] = 1
+            elif option_name == 'MinionAttackTask':
+                minion_stats_batch[i, option.Source.ZonePosition, -1] = 1
+                if option.Target.Zone is not None:
+                    if option.Target.Zone.Controller.Name == self.game.CurrentOpponent.Name:
+                        minion_stats_batch[i, 7 + option.Target.ZonePosition, -2] = 1
+                elif option.Target == self.game.CurrentPlayer.Hero:
+                    hero_stats_batch[i, 0, -2] = 1
+                elif option.Target == self.game.CurrentOpponent.Hero:
+                    hero_stats_batch[i, 1, -2] = 1
+            elif option_name == 'HeroAttackTask':
+                hero_stats_batch[i, 0, -1] = 1
+                if option.HasTarget:
+                    if option.Target.Zone is not None:
+                        if option.Target.Zone.Controller.Name == self.game.CurrentPlayer.Name:
+                            minion_stats_batch[i, option.Target.ZonePosition, -2] = 1
+                        elif option.Target.Zone.Controller.Name == self.game.CurrentOpponent.Name:
+                            minion_stats_batch[i, 7 + option.Target.ZonePosition, -2] = 1
+                    elif option.Target == self.game.CurrentPlayer.Hero:
+                        hero_stats_batch[i, 0, -2] = 1
+                    elif option.Target == self.game.CurrentOpponent.Hero:
+                        hero_stats_batch[i, 1, -2] = 1
+            # else:
+            #     print(option_name)
+            #     print(len(options))
+        obs = {
+            "hand_card_names": game_state["hand_card_names"],
+            "minion_names": game_state["minion_names"],
+            "weapon_names": game_state["weapon_names"],
+            "secret_names": game_state["secret_names"],
+            "hand_card_stats": hand_card_stats_batch,
+            "minion_stats": minion_stats_batch,
+            "hero_stats": hero_stats_batch,
+            "deck_strategy": game_state['deck_strategy'],
+            "hand_card_name_description": game_state['hand_card_name_description'],
+            "minion_name_description": game_state['minion_name_description'],
+            "weapon_name_description": game_state['weapon_name_description'],
+            "secret_name_description": game_state['secret_name_description'],
+        }
+        return obs
 
-    # 处理对方的武器
-    if all(weapon is None for weapon in opponent_weapons):
-        descriptions.append("Your opponent has no weapons.")
+
+    def get_agent_actions(self):
+        options = self.game.CurrentPlayer.Options()
+        # num_options = len(options)
+        # option_ids = []
+        # for i in range(num_options):
+        #     # the order of option ids is the same as the order of gamme options
+        #     # we use model output to match one of the option ids and get the actual option from options
+        #     option = options[i]
+        #     option_id = {'source': None, 'target': None, 'zone': None, 'option': option}
+        #     option_name = type(option).__name__
+        #     if option_name == 'EndTurnTask':
+        #         option_id['source'] = 19
+        #         option_ids.append(option_id)
+        #     elif option_name == 'HeroPowerTask':
+        #         option_id['source'] = 10
+        #         if option.HasTarget:
+        #             if option.Target.Zone is not None:
+        #                 if option.Target.Zone.Controller.Name == self.game.CurrentPlayer.Name:
+        #                     option_id['target'] = option.Target.ZonePosition  # friendly minion zone position
+        #                 elif option.Target.Zone.Controller.Name == self.game.CurrentOpponent.Name:
+        #                     option_id['target'] = 7 + option.Target.ZonePosition  # enemy minion zone position
+        #             elif option.Target == self.game.CurrentPlayer.Hero:
+        #                 option_id['target'] = 14
+        #             elif option.Target == self.game.CurrentOpponent.Hero:
+        #                 option_id['target'] = 15
+        #         option_ids.append(option_id)
+        #     elif option_name == 'PlayCardTask':
+        #         option_id['source'] = option.Source.ZonePosition  # play card from hand
+        #         if option.ZonePosition != -1:
+        #             # play minions, the target has a 'position' flag in -3
+        #             option_id['zone'] = option.ZonePosition
+        #         if option.HasTarget:
+        #             if option.Target.Zone is not None:
+        #                 if option.Target.Zone.Controller.Name == self.game.CurrentPlayer.Name:
+        #                     option_id['target'] = option.Target.ZonePosition  # friendly minion zone position
+        #                 elif option.Target.Zone.Controller.Name == self.game.CurrentOpponent.Name:
+        #                     option_id['target'] = 7 + option.Target.ZonePosition  # enemy minion zone position
+        #             elif option.Target == self.game.CurrentPlayer.Hero:
+        #                 option_id['target'] = 14
+        #             elif option.Target == self.game.CurrentOpponent.Hero:
+        #                 option_id['target'] = 15
+        #         if option.ChooseOne in [1, 2]:
+        #             # TODO: no choose one currently
+        #             pass
+        #         option_ids.append(option_id)
+        #     elif option_name == 'MinionAttackTask':
+        #         option_id['source'] = 11 + option.Source.ZonePosition  # friendly minion position
+        #         if option.Target.Zone is not None:
+        #             if option.Target.Zone.Controller.Name == self.game.CurrentOpponent.Name:
+        #                 option_id['target'] = 7 + option.Target.ZonePosition  # enemy minion zone position
+        #         elif option.Target == self.game.CurrentPlayer.Hero:
+        #             option_id['target'] = 15
+        #         elif option.Target == self.game.CurrentOpponent.Hero:
+        #             option_id['target'] = 14
+        #         option_ids.append(option_id)
+        #     elif option_name == 'HeroAttackTask':
+        #         option_id['source'] = 18
+        #         if option.HasTarget:
+        #             if option.Target.Zone is not None:
+        #                 if option.Target.Zone.Controller.Name == self.game.CurrentPlayer.Name:
+        #                     option_id['target'] = option.Target.ZonePosition
+        #                 elif option.Target.Zone.Controller.Name == self.game.CurrentOpponent.Name:
+        #                     option_id['target'] = 7 + option.Target.ZonePosition
+        #             elif option.Target == self.game.CurrentPlayer.Hero:
+        #                 option_id['target'] = 14
+        #             elif option.Target == self.game.CurrentOpponent.Hero:
+        #                 option_id['target'] = 15
+        #         option_ids.append(option_id)
+        
+        # source_mask = np.zeros(20)  # 0-9: hand cards, 10: Hero Power, 11-17: minions, 18: hero attack, 19: end turn
+        # target_mask_dict = {i: np.zeros(16) for i in range(20)}  # Create a target mask for each possible source
+        # for option_id in option_ids:
+        #     source_mask[option_id['source']] = 1
+        #     if option_id['target'] is not None:
+        #         target_mask_dict[option_id['source']][option_id['target']] = 1
+        # actions = {
+        #     'option_ids': option_ids,
+        #     'source_mask': source_mask,
+        #     'target_mask_dict': target_mask_dict,
+        #     'options': options,
+        # }
+        return options
+
+
+def validate_card(card_name):
+    card = Cards.FromName(card_name)
+    if card is not None and card.Implemented:
+        return True
     else:
-        for i, weapon in enumerate(opponent_weapons):
-            if weapon is None:
-                continue
-            
-            weapon_name = weapon[0]
-            weapon_desc = clean_description(weapon[1])
-            
-            descriptions.append(f"Opponent's Weapon: {weapon_name} and description: {weapon_desc}")
+        return False
 
-    return "\n".join(descriptions)
+
+if __name__ == '__main__':
+    game = Hearthstone()
+    
+    for i in range(10):
+        try:
+            position, obs, options, reward, done = game.reset()
+            print("reset:  ", position)
+            # print('reset done')
+        except Exception as e:
+            print('error reset')
+            print(e)
+            break
+        # print(position)
+        # print(obs)
+        # # print(options.FullPrint())
+        # print(reward)
+        # print(done)
+        while not done:
+            try:
+                action = random.choice(options)
+                position, obs, options, reward, done = game.step(action)
+
+                # print(position)
+            except:
+                print('error step')
+                break
+            # print(position)
+            # print(obs)
+            # # print(options.FullPrint())
+            # print(reward)
+            # print(done)
+
