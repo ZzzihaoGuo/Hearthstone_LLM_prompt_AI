@@ -1,28 +1,30 @@
 import os
 import random
 import re
+import openai
 from openai import OpenAI
 
 from Hearthstone import Hearthstone
 from matrix_2_text import *
 
-
-def call_openai_api(game_state, temperature=0.7, max_tokens=150):
-    client = OpenAI(
-        api_key=os.getenv("DASHSCOPE_API_KEY"),
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    )
+# client = OpenAI()
+def call_openai_api(game_state, temperature=0.2, max_tokens=100):
+    client = OpenAI()
     completion = client.chat.completions.create(
-        model="qwen-plus",
+        model="gpt-4o-mini",
         messages=[
             {'role': 'system', 'content': 'You are an expert Hearthstone player.'}, # add more descriptions about how to play hearthstone
             {'role': 'user', 'content': game_state}
-        ]
+        ],
+        temperature=temperature,
+        max_tokens=max_tokens
     )
 
-    print(completion.choices[0].message.content)
+    print('gpt output: ', completion.choices[0].message.content)
 
-    return int(completion.choices[0].message.content[-2])
+    output_number = extract_last_integer(completion.choices[0].message.content)
+
+    return int(output_number)
 
 
 def game_state_for_LLM(obs, options, player, op_player):
@@ -61,9 +63,12 @@ def game_action_for_env(game_state, actions):
     
     actions = convert_actions_to_text(actions_list)
 
+    if isinstance(actions, int):
+        return actions
+
     action_state_input = '/n'.join([game_state, actions])
 
-    output_prompt = ' Attention! You need choose 1 action and give me the index number in the end of your reply, JUST GIVE ME 1 OPTION, DONT SHOW OTHERS' 
+    output_prompt = ' /n/n Attention! You need choose 1 action and give me the index number in the end of your reply, JUST GIVE ME 1 INT NUMBER AT LAST, DONT SHOW OTHERS' 
     
     return action_state_input + output_prompt
 
@@ -81,34 +86,65 @@ def multi_turn_conversation_with_bot(player, op_player):
         
         # other method --random action
         if player != position+ '_not_in_model':
-            print("bot's action")
+            # print("bot's action")
             action = random.choice(options)
             position, obs, options, reward, done = game.step(action)
             continue
 
-        print("LLM's action")
+        # print("LLM's action")
         game_state = game_state_for_LLM(obs, options, player, op_player)
 
         input_for_model = game_action_for_env(game_state, options)
 
-        # ai_move = call_openai_api(input_for_model)
+        if isinstance(input_for_model, int)
+            ai_move = input_for_model
+        else:
+
+            ai_move = call_openai_api(input_for_model)
+            
         # action = game_action_for_env(ai_move)
-        action = random.choice(options)
+        action = options[ai_move]
 
         position, obs, options, reward, done = game.step(action)
-
-        if reward == 1:
-            print('Game Over! AI wins!')
-        elif reward == -1:
-            print('Game Over! Bot wins')
-        if done is True:
-            break
+        if player == 'Player1_not_in_model':
+            if reward == 1:
+                print('Game Over! AI wins!')
+            elif reward == -1:
+                print('Game Over! Bot wins')
+            if done is True:
+                return reward
+        
+        else:
+            if reward == -1:
+                print('Game Over! AI wins!')
+            elif reward == 1:
+                print('Game Over! Bot wins')
+            if done is True:
+                return reward
 
 
 if __name__ == '__main__':
+    total_game_num = 4
+    player1_win_number = 0
+    player2_win_number = 0
+    for i in range(4):
+        
+        # AI play first 
+        # count = multi_turn_conversation_with_bot("Player1_not_in_model", "Player2")
+        # Bot play first
+        count = multi_turn_conversation_with_bot("Player2_not_in_model", "Player1")
 
-    multi_turn_conversation_with_bot("Player1_not_in_model", "Player2")
-
+        if count is False:
+            total_game_num -= 1
+        
+        elif count == 1:
+            player1_win_number += 1
+        elif count == -1:
+            player2_win_number += 1
+    
+    print('play1 win rate: ', player1_win_number/total_game_num)
+    print('play2 win rate: ', player2_win_number/total_game_num)
+    print('worked game number: ', total_game_num)
 
 
 
